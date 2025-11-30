@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "530440772344",
+    "project_id": "visitelecoin",
+    "storage_bucket": "visitelecoin.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:530440772344:android:6398b5066aa636aaeb390d",
+        "android_client_info": {
+          "package_name": "com.example.visitelecoin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBTtgW93Uwhc9qxCC6QJBFKqTHeFBhZE50"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
