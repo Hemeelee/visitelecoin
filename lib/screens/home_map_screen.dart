@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class HomeMapScreen extends StatefulWidget {
   const HomeMapScreen({super.key});
@@ -14,20 +15,46 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   LatLng _currentPosition = LatLng(48.117266, -1.6777926); // Rennes par défaut
   String _selectedCategory = "Bars";
 
-  final Map<String, LatLng> _cities = {
-    "Rennes": LatLng(48.117266, -1.6777926),
-    "Paris": LatLng(48.8566, 2.3522),
-    "Lyon": LatLng(45.764043, 4.835659),
-    "Marseille": LatLng(43.296482, 5.36978),
-  };
+  Map<String, LatLng> _cities = {};
+  bool _isLoadingCities = true;
 
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
+    _loadCities();
+  }
+
+  // Charger les villes depuis Firestore
+  Future<void> _loadCities() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance.collection('cities').get();
+      final Map<String, LatLng> citiesMap = {};
+      for (var doc in snapshot.docs) {
+        final data = doc.data();
+        final name = data['name'] as String;
+        final lat = data['latitude'] as double;
+        final lng = data['longitude'] as double;
+        citiesMap[name] = LatLng(lat, lng);
+      }
+      setState(() {
+        _cities = citiesMap;
+        _isLoadingCities = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoadingCities = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Erreur lors du chargement des villes : $e')),
+      );
+    }
   }
 
   void _selectCity() {
+    if (_isLoadingCities) return;
+    if (_cities.isEmpty) return;
+
     showModalBottomSheet(
       context: context,
       builder: (_) => Container(
@@ -95,6 +122,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   }
 
   void _showList() {
+    if (_cities.isEmpty) return;
     showModalBottomSheet(
       context: context,
       builder: (_) => Container(
@@ -104,13 +132,12 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
           children: [
             Text(
               "Liste de $_selectedCategory à ${_cities.entries.firstWhere((e) => e.value == _currentPosition).key}",
-              style:
-              const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             Expanded(
               child: ListView.builder(
-                itemCount: 10,
+                itemCount: 10, // Pour l'instant fixe
                 itemBuilder: (context, index) => ListTile(
                   title: Text("$_selectedCategory #${index + 1}"),
                   leading: const Icon(Icons.place),
