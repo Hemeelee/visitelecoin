@@ -1,7 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:http/http.dart' as http;
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:visitelecoin/screens/stats_screen.dart';
+import 'package:visitelecoin/screens/login_screen.dart';
 
 class HomeMapScreen extends StatefulWidget {
   const HomeMapScreen({super.key});
@@ -12,78 +17,607 @@ class HomeMapScreen extends StatefulWidget {
 
 class _HomeMapScreenState extends State<HomeMapScreen> {
   late MapController _mapController;
-  LatLng _currentPosition = LatLng(48.117266, -1.6777926); // Rennes par défaut
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  User? _currentUser;
+
+  LatLng _currentPosition = LatLng(48.117266, -1.6777926); // Rennes
   String _selectedCategory = "Bars";
+  String _currentCityName = "Rennes";
 
   Map<String, LatLng> _cities = {};
-  bool _isLoadingCities = true;
+  bool _loadingCities = true;
+
+  List<Map<String, dynamic>> _results = [];
+  List<Marker> _markers = [];
+  bool _loading = false;
+
+  // Cache pour les statistiques
+  Map<String, int> _visitedStats = {};
+  Set<String> _visitedPlaces = {};
+  bool _loadingVisited = false;
+
+  // Stocker les totaux par ville et par catégorie
+  Map<String, Map<String, int>> _totalPlacesByCityAndCategory = {};
+  bool _initialLoadingComplete = false;
+
+  // Mappage des catégories avec leurs tags OSM
+  final Map<String, Map<String, dynamic>> _categories = {
+    "Bars": {
+      "tag": "\"amenity\"=\"bar\"",
+      "icon": Icons.local_bar,
+      "color": Colors.blue,
+    },
+    "Restaurants": {
+      "tag": "\"amenity\"=\"restaurant\"",
+      "icon": Icons.restaurant,
+      "color": Colors.red,
+    },
+    "Musées": {
+      "tag": "\"tourism\"=\"museum\"",
+      "icon": Icons.museum,
+      "color": Colors.purple,
+    },
+    "Parcs": {
+      "tag": "\"leisure\"=\"park\"",
+      "icon": Icons.park,
+      "color": Colors.deepOrangeAccent,
+    },
+  };
+
+  final Map<String, String> osmHeaders = {
+    "User-Agent": "VisiteLeCoin/1.0 (contact: emilie.huard747@gmail.com)"
+  };
+
+  final String mapTilerKey = "323qSV9Uj2AXSUjRLRuR";
 
   @override
   void initState() {
     super.initState();
     _mapController = MapController();
-    _loadCities();
+    _checkCurrentUser();
   }
 
-  // Charger les villes depuis Firestore
-  Future<void> _loadCities() async {
-    try {
-      final snapshot = await FirebaseFirestore.instance.collection('cities').get();
-      final Map<String, LatLng> citiesMap = {};
-      for (var doc in snapshot.docs) {
-        final data = doc.data();
-        final name = data['name'] as String;
-        final lat = data['latitude'] as double;
-        final lng = data['longitude'] as double;
-        citiesMap[name] = LatLng(lat, lng);
-      }
-      setState(() {
-        _cities = citiesMap;
-        _isLoadingCities = false;
+  Future<void> _checkCurrentUser() async {
+    _currentUser = _auth.currentUser;
+    if (_currentUser != null) {
+      await _loadCities();
+      await _loadVisitedPlaces();
+      await _loadStats();
+
+      // Charger toutes les catégories pour Rennes au démarrage
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await _loadAllCategoriesForCity();
+        // Puis charger les bars comme catégorie active
+        _searchAmenities();
       });
-    } catch (e) {
-      setState(() {
-        _isLoadingCities = false;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _logout();
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Erreur lors du chargement des villes : $e')),
-      );
     }
   }
 
-  void _selectCity() {
-    if (_isLoadingCities) return;
-    if (_cities.isEmpty) return;
+  Future<void> _loadAllCategoriesForCity() async {
+    if (_currentUser == null) return;
+
+    final String defaultCity = "Rennes";
+
+    // Initialiser la map pour cette ville
+    if (!_totalPlacesByCityAndCategory.containsKey(defaultCity)) {
+      _totalPlacesByCityAndCategory[defaultCity] = {
+        'Bars': 0,
+        'Restaurants': 0,
+        'Musées': 0,
+        'Parcs': 0,
+      };
+    }
+
+    // Charger les totaux pour chaque catégorie
+    for (var category in _categories.keys) {
+      await _loadCategoryTotalForCity(defaultCity, category);
+    }
+
+    setState(() {
+      _initialLoadingComplete = true;
+    });
+  }
+
+  Future<void> _loadCategoryTotalForCity(String city, String category) async {
+    try {
+      final categoryConfig = _categories[category] ?? _categories["Bars"]!;
+      String tag = categoryConfig["tag"] as String;
+
+      final nominatimUrl = Uri.parse(
+        "https://nominatim.openstreetmap.org/search?q=$city&format=json&limit=1",
+      );
+
+      final nominatimRes = await http.get(
+        nominatimUrl,
+        headers: osmHeaders,
+      );
+
+      if (nominatimRes.statusCode != 200) return;
+
+      final cityData = jsonDecode(nominatimRes.body)[0];
+      final double lat = double.parse(cityData["lat"]);
+      final double lon = double.parse(cityData["lon"]);
+
+      final overpassQuery = """
+    [out:json];
+    (
+      node[$tag](around:5000, $lat, $lon);
+      way[$tag](around:5000, $lat, $lon);
+      relation[$tag](around:5000, $lat, $lon);
+    );
+    out center;
+    """;
+
+      final overpassRes = await http.post(
+        Uri.parse("https://overpass-api.de/api/interpreter"),
+        headers: osmHeaders,
+        body: {"data": overpassQuery},
+      );
+
+      if (overpassRes.statusCode != 200) return;
+
+      final data = jsonDecode(overpassRes.body);
+      List<Map<String, dynamic>> elements =
+      List<Map<String, dynamic>>.from(data["elements"]);
+
+      // Filtrer uniquement les éléments avec un nom
+      final filteredElements = elements.where((item) {
+        return item["tags"]?["name"] != null &&
+            item["tags"]["name"].toString().trim().isNotEmpty;
+      }).toList();
+
+      // Mettre à jour le total
+      if (mounted) {
+        setState(() {
+          _totalPlacesByCityAndCategory[city]![category] = filteredElements.length;
+        });
+      }
+    } catch (e) {
+      print("Erreur lors du chargement de $category pour $city: $e");
+    }
+  }
+
+  Future<void> _loadCities() async {
+    final snapshot = await FirebaseFirestore.instance.collection('cities').get();
+
+    final Map<String, LatLng> cities = {};
+    for (var doc in snapshot.docs) {
+      cities[doc['name']] = LatLng(doc['latitude'], doc['longitude']);
+    }
+
+    setState(() {
+      _cities = cities;
+      _loadingCities = false;
+    });
+  }
+
+  // Charger les lieux visités de l'utilisateur courant
+  Future<void> _loadVisitedPlaces() async {
+    if (_currentUser == null) return;
+
+    setState(() => _loadingVisited = true);
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('visitedPlaces')
+        .where('userId', isEqualTo: _currentUser!.uid)
+        .get();
+
+    final visitedIds = <String>{};
+    for (var doc in snapshot.docs) {
+      visitedIds.add(doc['placeId']);
+    }
+
+    setState(() {
+      _visitedPlaces = visitedIds;
+      _loadingVisited = false;
+    });
+
+    if (_results.isNotEmpty) {
+      _createMarkers();
+    }
+  }
+
+  // Charger les statistiques par catégorie
+  Future<void> _loadStats() async {
+    if (_currentUser == null) return;
+
+    final snapshot = await FirebaseFirestore.instance
+        .collection('visitedPlaces')
+        .where('userId', isEqualTo: _currentUser!.uid)
+        .get();
+
+    final stats = <String, int>{};
+    for (var doc in snapshot.docs) {
+      final category = doc['category'] ?? 'Non catégorisé';
+      stats[category] = (stats[category] ?? 0) + 1;
+    }
+
+    setState(() {
+      _visitedStats = stats;
+    });
+  }
+
+  // Marquer un lieu comme visité
+  Future<void> _markAsVisited(Map<String, dynamic> place) async {
+    if (_currentUser == null) return;
+
+    final placeId = place['id'].toString();
+    final placeName = place['tags']['name'] ?? 'Lieu sans nom';
+    final placeCategory = _selectedCategory;
+
+    bool isCurrentlyVisited = _visitedPlaces.contains(placeId);
+
+    setState(() {
+      if (isCurrentlyVisited) {
+        _visitedPlaces.remove(placeId);
+        if (_visitedStats.containsKey(placeCategory)) {
+          _visitedStats[placeCategory] = _visitedStats[placeCategory]! - 1;
+          if (_visitedStats[placeCategory]! <= 0) {
+            _visitedStats.remove(placeCategory);
+          }
+        }
+      } else {
+        _visitedPlaces.add(placeId);
+        _visitedStats[placeCategory] = (_visitedStats[placeCategory] ?? 0) + 1;
+      }
+    });
+
+    // Mettre à jour Firebase
+    if (isCurrentlyVisited) {
+      await FirebaseFirestore.instance
+          .collection('visitedPlaces')
+          .where('placeId', isEqualTo: placeId)
+          .where('userId', isEqualTo: _currentUser!.uid)
+          .get()
+          .then((querySnapshot) {
+        for (var doc in querySnapshot.docs) {
+          doc.reference.delete();
+        }
+      });
+    } else {
+      await FirebaseFirestore.instance.collection('visitedPlaces').add({
+        'placeId': placeId,
+        'name': placeName,
+        'category': placeCategory,
+        'latitude': place['lat'],
+        'longitude': place['lon'],
+        'userId': _currentUser!.uid,
+        'userEmail': _currentUser!.email,
+        'city': _currentCityName, // Stocker la ville
+        'visitedAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _createMarkers();
+      }
+    });
+  }
+
+  Future<void> _searchAmenities() async {
+    if (_currentUser == null) return;
+
+    setState(() {
+      _loading = true;
+      _results = [];
+      _markers = [];
+    });
+
+    final cityEntry = _cities.entries.firstWhere(
+          (e) => e.value == _currentPosition,
+      orElse: () => const MapEntry("Rennes", LatLng(48.117266, -1.6777926)),
+    );
+    _currentCityName = cityEntry.key;
+
+    // Assurer que la ville existe dans la map
+    if (!_totalPlacesByCityAndCategory.containsKey(_currentCityName)) {
+      _totalPlacesByCityAndCategory[_currentCityName] = {
+        'Bars': 0,
+        'Restaurants': 0,
+        'Musées': 0,
+        'Parcs': 0,
+      };
+    }
+
+    final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
+    String tag = categoryConfig["tag"] as String;
+
+    final nominatimUrl = Uri.parse(
+      "https://nominatim.openstreetmap.org/search?q=$_currentCityName&format=json&limit=1",
+    );
+
+    final nominatimRes = await http.get(
+      nominatimUrl,
+      headers: osmHeaders,
+    );
+
+    if (nominatimRes.statusCode != 200) {
+      setState(() => _loading = false);
+      return;
+    }
+
+    final cityData = jsonDecode(nominatimRes.body)[0];
+    final double lat = double.parse(cityData["lat"]);
+    final double lon = double.parse(cityData["lon"]);
+
+    final overpassQuery = """
+  [out:json];
+  (
+    node[$tag](around:5000, $lat, $lon);
+    way[$tag](around:5000, $lat, $lon);
+    relation[$tag](around:5000, $lat, $lon);
+  );
+  out center;
+  """;
+
+    final overpassRes = await http.post(
+      Uri.parse("https://overpass-api.de/api/interpreter"),
+      headers: osmHeaders,
+      body: {"data": overpassQuery},
+    );
+
+    if (overpassRes.statusCode != 200) {
+      setState(() => _loading = false);
+      return;
+    }
+
+    final data = jsonDecode(overpassRes.body);
+    List<Map<String, dynamic>> elements =
+    List<Map<String, dynamic>>.from(data["elements"]);
+
+    // Filtrer uniquement les éléments avec un nom
+    final filteredElements = elements.where((item) {
+      return item["tags"]?["name"] != null &&
+          item["tags"]["name"].toString().trim().isNotEmpty;
+    }).toList();
+
+    // Extraire les coordonnées correctes
+    final processedElements = filteredElements.map((item) {
+      if (item["type"] == "node") {
+        return {
+          ...item,
+          "lat": item["lat"]?.toDouble(),
+          "lon": item["lon"]?.toDouble(),
+        };
+      } else if (item["center"] != null) {
+        return {
+          ...item,
+          "lat": item["center"]["lat"]?.toDouble(),
+          "lon": item["center"]["lon"]?.toDouble(),
+        };
+      }
+      return item;
+    }).where((item) {
+      return item["lat"] != null && item["lon"] != null;
+    }).toList();
+
+    // Stocker le total pour cette ville et catégorie
+    setState(() {
+      _results = List<Map<String, dynamic>>.from(processedElements);
+      _totalPlacesByCityAndCategory[_currentCityName]![_selectedCategory] = _results.length;
+      _loading = false;
+    });
+
+    _createMarkers();
+
+    if (_markers.isNotEmpty) {
+      _mapController.move(_markers[0].point, 14);
+    }
+  }
+
+  void _createMarkers() {
+    final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
+    final Color categoryColor = categoryConfig["color"] as Color;
+
+    final markers = _results.where((item) {
+      final hasLat = item["lat"] != null;
+      final hasLon = item["lon"] != null;
+      return hasLat && hasLon;
+    }).map((item) {
+      final lat = item["lat"]?.toDouble();
+      final lon = item["lon"]?.toDouble();
+
+      final placeId = item['id'].toString();
+      final isVisited = _visitedPlaces.contains(placeId);
+
+      return Marker(
+        width: 40,
+        height: 40,
+        point: LatLng(lat!, lon!),
+        child: GestureDetector(
+          onTap: () => _showPlaceDetails(item),
+          child: Stack(
+            children: [
+              Icon(
+                Icons.location_pin,
+                color: isVisited ? Colors.green : categoryColor,
+                size: 40,
+              ),
+              if (isVisited)
+                Positioned(
+                  top: 2,
+                  right: 2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.check,
+                      size: 12,
+                      color: Colors.green,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    }).whereType<Marker>().toList();
+
+    setState(() {
+      _markers = markers;
+    });
+  }
+
+  void _showPlaceDetails(Map<String, dynamic> place) {
+    final placeId = place['id'].toString();
+    final isVisited = _visitedPlaces.contains(placeId);
+    final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
+    final Color categoryColor = categoryConfig["color"] as Color;
+    final IconData categoryIcon = categoryConfig["icon"] as IconData;
 
     showModalBottomSheet(
       context: context,
-      builder: (_) => Container(
-        height: 200,
-        padding: const EdgeInsets.all(20),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text(
-              "Choisir une ville",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            Row(
+              children: [
+                Icon(
+                  categoryIcon,
+                  color: categoryColor,
+                  size: 32,
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    place["tags"]["name"] ?? "Lieu sans nom",
+                    style: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (isVisited)
+                  const Icon(Icons.check_circle, color: Colors.green, size: 24),
+              ],
             ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 10,
-              children: _cities.entries
-                  .map((entry) => ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _currentPosition = entry.value;
-                    _mapController.move(_currentPosition, 13);
-                  });
-                  Navigator.pop(context);
-                },
-                child: Text(entry.key),
-              ))
-                  .toList(),
+            const SizedBox(height: 16),
+
+            if (place["tags"]["addr:street"] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.location_on, size: 20, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "${place["tags"]["addr:street"]}${place["tags"]["addr:city"] != null ? ", ${place["tags"]["addr:city"]}" : ""}",
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (place["tags"]["opening_hours"] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.schedule, size: 20, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(place["tags"]["opening_hours"]),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (place["tags"]["phone"] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    const Icon(Icons.phone, size: 20, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(place["tags"]["phone"]),
+                    ),
+                  ],
+                ),
+              ),
+
+            if (place["tags"]["website"] != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  children: [
+                    const Icon(Icons.language, size: 20, color: Colors.grey),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        place["tags"]["website"],
+                        style: TextStyle(color: Colors.blue[700]),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 8),
+            ElevatedButton.icon(
+              icon: Icon(isVisited ? Icons.check_circle : Icons.place),
+              label: Text(isVisited ? 'Déjà visité' : 'Marquer comme visité'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isVisited ? Colors.green : categoryColor,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 50),
+              ),
+              onPressed: () {
+                Navigator.pop(context);
+                _markAsVisited(place);
+              },
+            ),
+
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.close),
+              label: const Text('Fermer'),
+              onPressed: () => Navigator.pop(context),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  void _selectCity() {
+    if (_loadingCities || _currentUser == null) return;
+
+    showModalBottomSheet(
+      context: context,
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: _cities.entries.map((entry) {
+          return ListTile(
+            leading: const Icon(Icons.location_city),
+            title: Text(entry.key),
+            trailing: _currentCityName == entry.key
+                ? const Icon(Icons.check, color: Colors.green)
+                : null,
+            onTap: () {
+              setState(() {
+                _currentPosition = entry.value;
+                _currentCityName = entry.key;
+              });
+              Navigator.pop(context);
+              _searchAmenities();
+            },
+          );
+        }).toList(),
       ),
     );
   }
@@ -91,87 +625,195 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   void _selectCategory() {
     showModalBottomSheet(
       context: context,
-      builder: (_) => Container(
-        height: 200,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            const Text(
-              "Choisir une catégorie",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 10,
-              children: ["Bars", "Restaurants", "Musées", "Parcs"]
-                  .map((category) => ElevatedButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedCategory = category;
-                  });
-                  Navigator.pop(context);
-                },
-                child: Text(category),
-              ))
-                  .toList(),
-            ),
-          ],
-        ),
+      builder: (_) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: _categories.keys.map((key) {
+          final category = _categories[key]!;
+          final visitedCount = _visitedStats[key] ?? 0;
+
+          return ListTile(
+            leading: Icon(category["icon"] as IconData, color: category["color"] as Color),
+            title: Text(key),
+            trailing: _selectedCategory == key
+                ? const Icon(Icons.check, color: Colors.green)
+                : null,
+            onTap: () {
+              setState(() {
+                _selectedCategory = key;
+              });
+              Navigator.pop(context);
+              _searchAmenities();
+            },
+          );
+        }).toList(),
       ),
     );
   }
 
   void _showList() {
-    if (_cities.isEmpty) return;
+    final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
+    final Color categoryColor = categoryConfig["color"] as Color;
+
     showModalBottomSheet(
       context: context,
-      builder: (_) => Container(
-        height: 300,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: [
-            Text(
-              "Liste de $_selectedCategory à ${_cities.entries.firstWhere((e) => e.value == _currentPosition).key}",
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: ListView.builder(
-                itemCount: 10, // Pour l'instant fixe
-                itemBuilder: (context, index) => ListTile(
-                  title: Text("$_selectedCategory #${index + 1}"),
-                  leading: const Icon(Icons.place),
-                ),
-              ),
-            ),
-          ],
+      isScrollControlled: true,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setStateLocal) {
+            return DraggableScrollableSheet(
+              expand: false,
+              initialChildSize: 0.7,
+              maxChildSize: 0.9,
+              builder: (_, scrollController) {
+                return Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: categoryColor.withOpacity(0.1),
+                        borderRadius: const BorderRadius.only(
+                          topLeft: Radius.circular(20),
+                          topRight: Radius.circular(20),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                categoryConfig["icon"] as IconData,
+                                color: categoryColor,
+                                size: 24,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                _selectedCategory,
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                  color: categoryColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Chip(
+                            label: Text('${_results.length} résultats'),
+                            backgroundColor: categoryColor,
+                            labelStyle: const TextStyle(color: Colors.white),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: scrollController,
+                        itemCount: _results.length,
+                        itemBuilder: (_, i) {
+                          final item = _results[i];
+                          final placeId = item['id'].toString();
+                          final isVisited = _visitedPlaces.contains(placeId);
+
+                          return ListTile(
+                            leading: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: isVisited ? Colors.green : categoryColor.withOpacity(0.2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Icon(
+                                categoryConfig["icon"] as IconData,
+                                color: isVisited ? Colors.white : categoryColor,
+                              ),
+                            ),
+                            title: Text(
+                              item["tags"]["name"],
+                              style: TextStyle(
+                                fontWeight: isVisited ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                if (item["tags"]["addr:street"] != null)
+                                  Text(
+                                    "${item["tags"]["addr:street"]}",
+                                    style: const TextStyle(fontSize: 12),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                              ],
+                            ),
+                            trailing: Checkbox(
+                              value: isVisited,
+                              onChanged: (bool? value) async {
+                                setStateLocal(() {});
+                                await _markAsVisited(item);
+                                setStateLocal(() {});
+                                if (mounted) {
+                                  setState(() {});
+                                }
+                              },
+                              activeColor: Colors.green,
+                            ),
+                            onTap: () {
+                              Navigator.pop(context);
+                              _mapController.move(
+                                LatLng(
+                                  item["lat"]?.toDouble() ?? 0,
+                                  item["lon"]?.toDouble() ?? 0,
+                                ),
+                                16,
+                              );
+                              _showPlaceDetails(item);
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _navigateToStats() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StatsScreen(
+          userId: _currentUser!.uid,
+          userName: _currentUser!.email?.split('@').first ?? 'Utilisateur',
+          totalPlacesByCityAndCategory: _totalPlacesByCityAndCategory,
+          currentCity: _currentCityName,
         ),
       ),
     );
   }
 
-  void _showStats() {
-    showModalBottomSheet(
-      context: context,
-      builder: (_) => Container(
-        height: 200,
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          children: const [
-            Text(
-              "Statistiques",
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            SizedBox(height: 20),
-            Text("Statistiques des visites, des lieux sélectionnés etc."),
-          ],
-        ),
-      ),
+  Future<void> _logout() async {
+    await _auth.signOut();
+
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginScreen()),
+          (Route<dynamic> route) => false,
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (_currentUser == null) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
     return Scaffold(
       body: Stack(
         children: [
@@ -180,54 +822,156 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
             options: MapOptions(
               initialCenter: _currentPosition,
               initialZoom: 13,
+              onTap: (_, __) {
+                if (ModalRoute.of(context)?.isCurrent != true) {
+                  Navigator.pop(context);
+                }
+              },
             ),
             children: [
               TileLayer(
-                urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-                userAgentPackageName: 'com.example.visitelecoin',
+                urlTemplate:
+                "https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=$mapTilerKey",
+                userAgentPackageName: 'com.visitelecoin.app',
               ),
+              MarkerLayer(markers: _markers),
             ],
           ),
+
+          if (_loading)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(),
+            ),
+
           Positioned(
-            bottom: 20,
+            top: 40,
             left: 20,
             right: 20,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 FloatingActionButton(
-                  heroTag: "city",
-                  onPressed: _selectCity,
-                  backgroundColor: Colors.green,
-                  child: const Icon(Icons.location_city),
-                  tooltip: "Choisir une ville",
+                  heroTag: "logout",
+                  mini: true,
+                  backgroundColor: Colors.white,
+                  onPressed: _logout,
+                  child: const Icon(Icons.logout, color: Colors.black),
                 ),
-                FloatingActionButton(
-                  heroTag: "category",
-                  onPressed: _selectCategory,
-                  backgroundColor: Colors.green,
-                  child: const Icon(Icons.category),
-                  tooltip: "Sélectionner catégorie",
+
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xCCFFFFFF),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 5,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '$_currentCityName',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: Colors.green,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                FloatingActionButton(
-                  heroTag: "list",
-                  onPressed: _showList,
-                  backgroundColor: Colors.green,
-                  child: const Icon(Icons.list),
-                  tooltip: "Voir la liste",
-                ),
+
                 FloatingActionButton(
                   heroTag: "stats",
-                  onPressed: _showStats,
+                  mini: true,
                   backgroundColor: Colors.green,
-                  child: const Icon(Icons.bar_chart),
-                  tooltip: "Statistiques",
+                  onPressed: _navigateToStats,
+                  child: const Icon(Icons.bar_chart, color: Colors.white),
                 ),
               ],
             ),
           ),
+
+          Positioned(
+            bottom: 20,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xCCFFFFFF),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 10,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildActionButton(
+                    icon: Icons.location_city,
+                    label: _currentCityName,
+                    onPressed: _selectCity,
+                  ),
+                  _buildActionButton(
+                    icon: Icons.category,
+                    label: _selectedCategory,
+                    onPressed: _selectCategory,
+                  ),
+                  _buildActionButton(
+                    icon: Icons.list,
+                    label: 'Liste',
+                    onPressed: _showList,
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return Column(
+      children: [
+        FloatingActionButton(
+          heroTag: label,
+          backgroundColor: Colors.green,
+          onPressed: onPressed,
+          child: Icon(icon, color: Colors.white),
+        ),
+        const SizedBox(height: 4),
+        SizedBox(
+          width: 80,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.green,
+            ),
+            textAlign: TextAlign.center,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }
