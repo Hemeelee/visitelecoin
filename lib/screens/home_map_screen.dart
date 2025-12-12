@@ -410,6 +410,18 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     }
   }
 
+  List<Map<String, dynamic>> filterResults(String query) {
+    if (query.isEmpty) return List.from(_results);
+
+    // Filtre les résultats en fonction du nom
+    final filtered = _results.where((item) {
+      final name = item['tags']['name']?.toString().toLowerCase() ?? '';
+      return name.contains(query.toLowerCase());
+    }).toList();
+
+    return filtered;
+  }
+
   void _createMarkers() {
     final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
     final Color categoryColor = categoryConfig["color"] as Color;
@@ -654,6 +666,10 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     final categoryConfig = _categories[_selectedCategory] ?? _categories["Bars"]!;
     final Color categoryColor = categoryConfig["color"] as Color;
 
+
+    TextEditingController searchController = TextEditingController();
+    List<Map<String, dynamic>> filteredResults = List.from(_results);
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -698,19 +714,37 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
                             ],
                           ),
                           Chip(
-                            label: Text('${_results.length} résultats'),
+                            label: Text('${filteredResults.length} résultats'),
                             backgroundColor: categoryColor,
                             labelStyle: const TextStyle(color: Colors.white),
                           ),
                         ],
                       ),
                     ),
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: TextField(
+                        controller: searchController,
+                        decoration: InputDecoration(
+                          hintText: 'Rechercher un lieu...',
+                          prefixIcon: const Icon(Icons.search),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        onChanged: (value) {
+                          setStateLocal(() {
+                            filteredResults = filterResults(value);
+                          });
+                        },
+                      ),
+                    ),
                     Expanded(
                       child: ListView.builder(
                         controller: scrollController,
-                        itemCount: _results.length,
+                        itemCount: filteredResults.length,
                         itemBuilder: (_, i) {
-                          final item = _results[i];
+                          final item = filteredResults[i];
                           final placeId = item['id'].toString();
                           final isVisited = _visitedPlaces.contains(placeId);
 
