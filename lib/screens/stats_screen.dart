@@ -41,6 +41,12 @@ class _StatsScreenState extends State<StatsScreen> {
           Padding(
             padding: const EdgeInsets.only(right: 16.0),
             child: DropdownButtonHideUnderline(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.green, // Couleur de fond du Dropdown
+                  borderRadius: BorderRadius.circular(8),
+                ),
               child: DropdownButton<String>(
                 value: _selectedCity,
                 icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
@@ -63,7 +69,7 @@ class _StatsScreenState extends State<StatsScreen> {
               ),
             ),
           ),
-        ],
+          )],
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance

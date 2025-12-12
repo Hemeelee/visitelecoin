@@ -308,15 +308,12 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       _markers = [];
     });
 
-    final cityEntry = _cities.entries.firstWhere(
-          (e) => e.value == _currentPosition,
-      orElse: () => const MapEntry("Rennes", LatLng(48.117266, -1.6777926)),
-    );
-    _currentCityName = cityEntry.key;
+    // Ne plus chercher la ville dans _cities, utiliser directement _currentCityName
+    final String city = _currentCityName;
 
-    // Assurer que la ville existe dans la map
-    if (!_totalPlacesByCityAndCategory.containsKey(_currentCityName)) {
-      _totalPlacesByCityAndCategory[_currentCityName] = {
+    // Assurer que la ville existe dans la map des totaux
+    if (!_totalPlacesByCityAndCategory.containsKey(city)) {
+      _totalPlacesByCityAndCategory[city] = {
         'Bars': 0,
         'Restaurants': 0,
         'Musées': 0,
@@ -328,7 +325,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     String tag = categoryConfig["tag"] as String;
 
     final nominatimUrl = Uri.parse(
-      "https://nominatim.openstreetmap.org/search?q=$_currentCityName&format=json&limit=1",
+      "https://nominatim.openstreetmap.org/search?q=$city&format=json&limit=1",
     );
 
     final nominatimRes = await http.get(
@@ -344,6 +341,10 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     final cityData = jsonDecode(nominatimRes.body)[0];
     final double lat = double.parse(cityData["lat"]);
     final double lon = double.parse(cityData["lon"]);
+
+    // Définir la position actuelle à la nouvelle ville
+    _currentPosition = LatLng(lat, lon);
+    _mapController.move(_currentPosition, 13);
 
     final overpassQuery = """
   [out:json];
@@ -830,6 +831,65 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     );
   }
 
+
+
+// --- Ajout recherche de ville via Nominatim ---
+  final TextEditingController _citySearchController = TextEditingController();
+
+
+  void _openCitySearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _citySearchController,
+              decoration: const InputDecoration(
+                hintText: 'Rechercher une ville...',
+                prefixIcon: Icon(Icons.search),
+              ),
+              onSubmitted: (value) async {
+                if (value.isEmpty) return;
+                await _searchCityByName(value);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Future<void> _searchCityByName(String city) async {
+    final url = Uri.parse("https://nominatim.openstreetmap.org/search?q=$city&format=json&limit=1");
+    final response = await http.get(url, headers: osmHeaders);
+    if (response.statusCode != 200) return;
+
+
+    final List data = jsonDecode(response.body);
+    if (data.isEmpty) return;
+
+
+    final double lat = double.parse(data[0]["lat"]);
+    final double lon = double.parse(data[0]["lon"]);
+
+
+    setState(() {
+      _currentCityName = city;
+      _currentPosition = LatLng(lat, lon);
+      //_loadCategoryTotalForCity(_currentCityName,_selectedCategory);
+    });
+
+
+    _mapController.move(_currentPosition, 13);
+    await _searchAmenities();
+  }
+
   Future<void> _logout() async {
     await _auth.signOut();
 
@@ -908,20 +968,40 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
                       ),
                     ],
                   ),
-                  child: Column(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        '$_currentCityName',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.green,
-                          fontSize: 14,
+                      // Nom de la ville
+                      Flexible(
+                        child: Text(
+                          _currentCityName.isEmpty ? 'Aucune ville' : _currentCityName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green,
+                            fontSize: 14,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+
+                      const SizedBox(width: 8), // petit espace entre texte et bouton
+
+                      // Bouton de recherche
+                      InkWell(
+                        onTap: _openCitySearch,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.green,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: const Icon(Icons.search, color: Colors.white, size: 20),
                         ),
                       ),
                     ],
                   ),
                 ),
-
                 FloatingActionButton(
                   heroTag: "stats",
                   mini: true,
