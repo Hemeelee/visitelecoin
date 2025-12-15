@@ -1,7 +1,8 @@
 # VisiteLeCoin
 
-![Logo](VisiteLeCoin/logo.jpeg)
-Ecrans:
+![Logo](./logo.jpeg)
+
+# Ecrans:
 - Page de connexion : connexion possible après création d'utilisateur.
 - Page de création de comptes : La création de compte fonctionne -> ajout en bd.
 - Page avec la carte. 
@@ -42,4 +43,3 @@ Création de compte: Nom, Prénom, Date de Naissance, Adresse Mail, Mot de Passe
 - Un système de récompense, par exemple : un badge pour les 10% de complétion d'une ville, un pour 100% etc...
 - Une dimension sociale pour comparer ses stats avec ses amis
 - un mode nuit
-- 
