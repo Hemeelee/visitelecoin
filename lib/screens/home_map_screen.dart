@@ -23,6 +23,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   LatLng _currentPosition = LatLng(48.117266, -1.6777926); // Rennes
   String _selectedCategory = "Bars";
   String _currentCityName = "Rennes";
+  double _currentCityLat = 0;
+  double _currentCityLon = 0;
 
   Map<String, LatLng> _cities = {};
   bool _loadingCities = true;
@@ -139,15 +141,15 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       if (nominatimRes.statusCode != 200) return;
 
       final cityData = jsonDecode(nominatimRes.body)[0];
-      final double lat = double.parse(cityData["lat"]);
-      final double lon = double.parse(cityData["lon"]);
+      _currentCityLat = double.parse(cityData["lat"]);
+      _currentCityLon = double.parse(cityData["lon"]);
 
       final overpassQuery = """
     [out:json];
     (
-      node[$tag](around:5000, $lat, $lon);
-      way[$tag](around:5000, $lat, $lon);
-      relation[$tag](around:5000, $lat, $lon);
+      node[$tag](around:5000, $_currentCityLat, $_currentCityLon);
+      way[$tag](around:5000, $_currentCityLat, $_currentCityLon);
+      relation[$tag](around:5000, $_currentCityLat, $_currentCityLon);
     );
     out center;
     """;
@@ -289,6 +291,11 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
         'userEmail': _currentUser!.email,
         'city': _currentCityName, // Stocker la ville
         'visitedAt': FieldValue.serverTimestamp(),
+      });
+      FirebaseFirestore.instance.collection('cities').add({
+        'name' : _currentCityName,
+        'latitude' : _currentCityLat,
+        'longitude' : _currentCityLon,
       });
     }
 
