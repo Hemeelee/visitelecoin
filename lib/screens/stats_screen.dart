@@ -28,7 +28,7 @@ class _StatsScreenState extends State<StatsScreen> {
     super.initState();
     _selectedCity = widget.currentCity;
 
-    // Récupérer toutes les villes disponibles
+    // Récupère toutes les villes disponibles
     _availableCities = ["Toutes les villes", ...widget.totalPlacesByCityAndCategory.keys.toList()];
   }
 
@@ -44,7 +44,7 @@ class _StatsScreenState extends State<StatsScreen> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: Colors.green, // Couleur de fond du Dropdown
+                  color: Colors.green,
                   borderRadius: BorderRadius.circular(8),
                 ),
               child: DropdownButton<String>(
@@ -87,10 +87,10 @@ class _StatsScreenState extends State<StatsScreen> {
 
           final allVisitedPlaces = snapshot.data!.docs;
 
-          // Calculer les statistiques pour toutes les villes
+          // Calcule les statistiques pour toutes les villes
           final globalStats = _calculateGlobalStats(allVisitedPlaces);
 
-          // Filtrer par ville si nécessaire
+          // Filtre par ville si nécessaire
           final filteredPlaces = _selectedCity == "Toutes les villes"
               ? allVisitedPlaces
               : allVisitedPlaces.where((doc) {
@@ -99,10 +99,10 @@ class _StatsScreenState extends State<StatsScreen> {
               final city = data['city'].toString();
               return city == _selectedCity;
             }
-            return false; // Exclure les lieux sans ville
+            return false;
           }).toList();
 
-          // Calculer les statistiques pour la ville sélectionnée
+          // Calcule les statistiques pour la ville sélectionnée
           final cityStats = _calculateCityStats(filteredPlaces);
 
           return _buildStatsContent(
@@ -162,7 +162,7 @@ class _StatsScreenState extends State<StatsScreen> {
     required int allVisitedPlacesCount,
     required int selectedCityVisitedCount,
   }) {
-    // Calculer les statistiques par catégorie
+    // Calcule les statistiques par catégorie
     final completionStats = <String, Map<String, dynamic>>{};
     final categories = ['Bars', 'Restaurants', 'Musées', 'Parcs'];
 
@@ -175,15 +175,12 @@ class _StatsScreenState extends State<StatsScreen> {
       bool hasRealData = false;
 
       if (_selectedCity == "Toutes les villes") {
-        // Pour "Toutes les villes", on montre la progression globale
         totalInArea = _calculateTotalForAllCities(category);
         hasRealData = totalInArea > 0;
       } else {
-        // Pour une ville spécifique
         totalInArea = widget.totalPlacesByCityAndCategory[_selectedCity]?[category] ?? 0;
         hasRealData = totalInArea > 0 && widget.totalPlacesByCityAndCategory.containsKey(_selectedCity);
 
-        // Si pas de données réelles, utiliser une estimation
         if (!hasRealData) {
           totalInArea = _getEstimatedTotalForCategory(category, _selectedCity);
         }
@@ -201,14 +198,12 @@ class _StatsScreenState extends State<StatsScreen> {
       };
     }
 
-    // Trier par pourcentage décroissant
     final sortedEntries = completionStats.entries.toList()
       ..sort((a, b) => b.value['percentage'].compareTo(a.value['percentage']));
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        // En-tête
         Card(
           margin: const EdgeInsets.only(bottom: 20),
           child: Padding(
@@ -275,7 +270,7 @@ class _StatsScreenState extends State<StatsScreen> {
                 const Divider(),
                 const SizedBox(height: 16),
 
-                // Statistiques clés
+
                 if (_selectedCity == "Toutes les villes") ...[
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -357,7 +352,7 @@ class _StatsScreenState extends State<StatsScreen> {
               final city = entry.key;
               final cityData = entry.value;
 
-              // Compter les lieux visités pour cette ville
+              // Compte les lieux visités pour cette ville
               final cityPlaces = visitedPlaces.where((place) {
                 final data = place.data() as Map<String, dynamic>;
                 final placeCity = data['city'] as String?;
@@ -366,7 +361,7 @@ class _StatsScreenState extends State<StatsScreen> {
 
               final cityVisitedCount = cityPlaces.length;
 
-              // Calculer le total pour cette ville
+              // Calcule le total pour cette ville
               int cityTotalPlaces = 0;
               for (var category in ['Bars', 'Restaurants', 'Musées', 'Parcs']) {
                 cityTotalPlaces += cityData[category] ?? 0;
@@ -421,7 +416,6 @@ class _StatsScreenState extends State<StatsScreen> {
           const SizedBox(height: 20),
         ],
 
-        // Progression par catégorie
         const Text(
           'Progression par catégorie :',
           style: TextStyle(
@@ -509,7 +503,6 @@ class _StatsScreenState extends State<StatsScreen> {
     );
   }
 
-  // Fonctions utilitaires
   int _calculateTotalForAllCities(String category) {
     int total = 0;
     for (var cityData in widget.totalPlacesByCityAndCategory.values) {
@@ -519,7 +512,6 @@ class _StatsScreenState extends State<StatsScreen> {
   }
 
   int _getEstimatedTotalForCategory(String category, String city) {
-    // Estimation basée sur la taille de la ville
     switch (category) {
       case 'Bars':
         return city.contains('Paris') ? 500 :
@@ -556,8 +548,6 @@ class _StatsScreenState extends State<StatsScreen> {
 
     if (totalPlaces == 0) return 0;
 
-    // Dans la vraie version, on compterait les lieux visités
-    // Pour l'instant, on retourne un placeholder
     return 25;
   }
 

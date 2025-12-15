@@ -33,12 +33,12 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   List<Marker> _markers = [];
   bool _loading = false;
 
-  // Cache pour les statistiques
+  //stats
   Map<String, int> _visitedStats = {};
   Set<String> _visitedPlaces = {};
   bool _loadingVisited = false;
 
-  // Stocker les totaux par ville et par catégorie
+  // Stocks les totaux par ville et par catégorie
   Map<String, Map<String, int>> _totalPlacesByCityAndCategory = {};
   bool _initialLoadingComplete = false;
 
@@ -86,10 +86,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       await _loadVisitedPlaces();
       await _loadStats();
 
-      // Charger toutes les catégories pour Rennes au démarrage
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         await _loadAllCategoriesForCity();
-        // Puis charger les bars comme catégorie active
         _searchAmenities();
       });
     } else {
@@ -104,7 +102,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
 
     final String defaultCity = "Rennes";
 
-    // Initialiser la map pour cette ville
+    // Initialise la map pour cette ville
     if (!_totalPlacesByCityAndCategory.containsKey(defaultCity)) {
       _totalPlacesByCityAndCategory[defaultCity] = {
         'Bars': 0,
@@ -114,7 +112,6 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       };
     }
 
-    // Charger les totaux pour chaque catégorie
     for (var category in _categories.keys) {
       await _loadCategoryTotalForCity(defaultCity, category);
     }
@@ -166,13 +163,11 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       List<Map<String, dynamic>> elements =
       List<Map<String, dynamic>>.from(data["elements"]);
 
-      // Filtrer uniquement les éléments avec un nom
       final filteredElements = elements.where((item) {
         return item["tags"]?["name"] != null &&
             item["tags"]["name"].toString().trim().isNotEmpty;
       }).toList();
 
-      // Mettre à jour le total
       if (mounted) {
         setState(() {
           _totalPlacesByCityAndCategory[city]![category] = filteredElements.length;
@@ -197,7 +192,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     });
   }
 
-  // Charger les lieux visités de l'utilisateur courant
+  // Charge les lieux visités par l'utilisateur courant
   Future<void> _loadVisitedPlaces() async {
     if (_currentUser == null) return;
 
@@ -223,7 +218,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     }
   }
 
-  // Charger les statistiques par catégorie
+  // Charge les statistiques par catégorie
   Future<void> _loadStats() async {
     if (_currentUser == null) return;
 
@@ -243,7 +238,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     });
   }
 
-  // Marquer un lieu comme visité
+  // Marque un lieu comme visité
   Future<void> _markAsVisited(Map<String, dynamic> place) async {
     if (_currentUser == null) return;
 
@@ -268,7 +263,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       }
     });
 
-    // Mettre à jour Firebase
+    // Met à jour Firebase
     if (isCurrentlyVisited) {
       await FirebaseFirestore.instance
           .collection('visitedPlaces')
@@ -315,10 +310,8 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       _markers = [];
     });
 
-    // Ne plus chercher la ville dans _cities, utiliser directement _currentCityName
     final String city = _currentCityName;
 
-    // Assurer que la ville existe dans la map des totaux
     if (!_totalPlacesByCityAndCategory.containsKey(city)) {
       _totalPlacesByCityAndCategory[city] = {
         'Bars': 0,
@@ -378,13 +371,11 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     List<Map<String, dynamic>> elements =
     List<Map<String, dynamic>>.from(data["elements"]);
 
-    // Filtrer uniquement les éléments avec un nom
     final filteredElements = elements.where((item) {
       return item["tags"]?["name"] != null &&
           item["tags"]["name"].toString().trim().isNotEmpty;
     }).toList();
 
-    // Extraire les coordonnées correctes
     final processedElements = filteredElements.map((item) {
       if (item["type"] == "node") {
         return {
@@ -404,7 +395,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
       return item["lat"] != null && item["lon"] != null;
     }).toList();
 
-    // Stocker le total pour cette ville et catégorie
+    // Stocke le total pour cette ville et catégorie
     setState(() {
       _results = List<Map<String, dynamic>>.from(processedElements);
       _totalPlacesByCityAndCategory[_currentCityName]![_selectedCategory] = _results.length;
@@ -421,7 +412,6 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
   List<Map<String, dynamic>> filterResults(String query) {
     if (query.isEmpty) return List.from(_results);
 
-    // Filtre les résultats en fonction du nom
     final filtered = _results.where((item) {
       final name = item['tags']['name']?.toString().toLowerCase() ?? '';
       return name.contains(query.toLowerCase());
@@ -838,9 +828,6 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
     );
   }
 
-
-
-// --- Ajout recherche de ville via Nominatim ---
   final TextEditingController _citySearchController = TextEditingController();
 
 
@@ -991,7 +978,7 @@ class _HomeMapScreenState extends State<HomeMapScreen> {
                         ),
                       ),
 
-                      const SizedBox(width: 8), // petit espace entre texte et bouton
+                      const SizedBox(width: 8),
 
                       // Bouton de recherche
                       InkWell(
